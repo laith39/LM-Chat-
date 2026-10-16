@@ -1,0 +1,304 @@
+name: Build AI Chat APK
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Generate project
+        run: |
+          mkdir -p app/src/main/java/com/laith/aichat
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "AiChat"
+          include(":app")
+          EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2g
+          EOF
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.laith.aichat"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.laith.aichat"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+          }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application
+                  android:label="Gemini AI Chat"
+                  android:theme="@android:style/Theme.Material.NoActionBar"
+                  android:usesCleartextTraffic="true">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > app/src/main/java/com/laith/aichat/MainActivity.kt <<'EOF'
+          package com.laith.aichat
+
+          import android.app.Activity
+          import android.content.SharedPreferences
+          import android.graphics.Color
+          import android.graphics.drawable.GradientDrawable
+          import android.os.Bundle
+          import android.view.Gravity
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.*
+          import kotlinx.coroutines.*
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+
+          class MainActivity : Activity() {
+              private lateinit var prefs: SharedPreferences
+              private lateinit var chatContainer: LinearLayout
+              private lateinit var scrollContainer: ScrollContainer
+              private lateinit var inputField: EditText
+              private lateinit var apiKeyInput: EditText
+              private val scope = CoroutineScope(Dispatchers.Main + Job())
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  prefs = getSharedPreferences("ai_prefs", MODE_PRIVATE)
+                  window.decorView.setBackgroundColor(Color.parseColor("#0B0F19"))
+
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                  }
+
+                  // شريط العلوية / إعدادات المفتاح
+                  val topBar = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setPadding(30, 30, 30, 20)
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#151C2C"))
+                      }
+                      gravity = Gravity.CENTER_VERTICAL
+                  }
+
+                  apiKeyInput = EditText(this).apply {
+                      hint = "أدخل Gemini API Key هنا..."
+                      setText(prefs.getString("api_key", ""))
+                      setTextColor(Color.WHITE)
+                      setHintTextColor(Color.parseColor("#64748B"))
+                      textSize = 13f
+                      setBackgroundColor(Color.TRANSPARENT)
+                      setPadding(20, 15, 20, 15)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      inputType = android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD or android.text.InputType.TYPE_CLASS_TEXT
+                      addTextChangedListener(object : android.text.TextWatcher {
+                          override fun afterTextChanged(s: android.text.Editable?) {
+                              prefs.edit().putString("api_key", s.toString().trim()).apply()
+                          }
+                          override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after) {}
+                          override fun onTextChanged(s: CharSequence?, start: Int, before: count: Int) {}
+                      })
+                  }
+                  topBar.addView(apiKeyInput)
+                  root.addView(topBar)
+
+                  // منطقة عرض الرسائل
+                  chatContainer = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(20, 20, 20, 20)
+                  }
+
+                  scrollContainer = ScrollContainer(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+                      addView(chatContainer)
+                  }
+                  root.addView(scrollContainer)
+
+                  // شريط الإدخال السفلي
+                  val bottomBar = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setPadding(20, 20, 20, 20)
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#151C2C"))
+                      }
+                      gravity = Gravity.CENTER_VERTICAL
+                  }
+
+                  inputField = EditText(this).apply {
+                      hint = "اكتب رسالتك هنا..."
+                      setTextColor(Color.WHITE)
+                      setHintTextColor(Color.parseColor("#64748B"))
+                      textSize = 15f
+                      setBackgroundColor(Color.TRANSPARENT)
+                      setPadding(20, 15, 20, 15)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                      setOnEditorActionListener { _, actionId, _ ->
+                          if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                              sendMessage()
+                              true
+                          } else false
+                      }
+                  }
+                  bottomBar.addView(inputField)
+
+                  val sendBtn = Button(this).apply {
+                      text = "إرسال"
+                      setTextColor(Color.WHITE)
+                      textSize = 14f
+                      isAllCaps = false
+                      background = GradientDrawable().apply {
+                          setColor(Color.parseColor("#007BFF"))
+                          cornerRadius = 16f
+                      }
+                      setPadding(30, 20, 30, 20)
+                      setOnClickListener { sendMessage() }
+                  }
+                  bottomBar.addView(sendBtn)
+                  root.addView(bottomBar)
+
+                  setContentView(root)
+                  addMessage("أهلاً بك! أدخل مفتاح الـ API في الأعلى وابدأ الدردشة.", false)
+              }
+
+              private fun sendMessage() {
+                  val text = inputField.text.toString().trim()
+                  val apiKey = apiKeyInput.text.toString().trim()
+
+                  if (apiKey.isEmpty()) {
+                      Toast.makeText(this, "الرجاء إدخال مفتاح API أولاً", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+                  if (text.isEmpty()) return
+
+                  addMessage(text, true)
+                  inputField.text.clear()
+
+                  val loadingId = addMessage("جاري التفكير...", false)
+
+                  scope.launch(Dispatchers.IO) {
+                      try {
+                          val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey")
+                          val conn = url.openConnection() as HttpURLConnection
+                          conn.requestMethod = "POST"
+                          conn.setRequestProperty("Content-Type", "application/json")
+                          conn.doOutput = true
+
+                          val jsonBody = JSONObject().apply {
+                              put("contents", JSONArray().put(JSONObject().apply {
+                                  put("parts", JSONArray().put(JSONObject().put("text", text)))
+                              }))
+                          }
+
+                          conn.outputStream.write(jsonBody.toString().toByteArray())
+                          
+                          val responseCode = conn.responseCode
+                          if (responseCode == 200) {
+                              val responseStr = conn.inputStream.bufferedReader().readText()
+                              val jsonResp = JSONObject(responseStr)
+                              val reply = jsonResp.getJSONArray("candidates")
+                                  .getJSONObject(0).getJSONObject("content")
+                                  .getJSONArray("parts").getJSONObject(0).getString("text")
+
+                              withContext(Dispatchers.Main) {
+                                  removeMessage(loadingId)
+                                  addMessage(reply, false)
+                              }
+                          } else {
+                              withContext(Dispatchers.Main) {
+                                  removeMessage(loadingId)
+                                  addMessage("خطأ في الاتصال بالخادم ($responseCode)", false)
+                              }
+                          }
+                      } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            removeMessage(loadingId)
+                            addMessage("فشل الاتصال: ${e.localizedMessage}", false)
+                        }
+                      }
+                  }
+              }
+
+              private var msgCounter = 0
+              private fun addMessage(text: String, isUser: Boolean): Int {
+                  val id = msgCounter++
+                  val container = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = if (isUser) Gravity.END else Gravity.START
+                      setPadding(0, 10, 0, 10)
+                      tag = id
+                  }
+
+                  val bubble = TextView(this).apply {
+                      this.text = text
+                      textSize = 15f
+                      setTextColor(Color.WHITE)
+                      setPadding(25, 20, 25, 20)
+                      background = GradientDrawable().apply {
+                          setColor(if (isUser) Color.parseColor("#007BFF") else Color.parseColor("#1E293B"))
+                          cornerRadius = 20f
+                      }
+                      maxWidth = (resources.displayMetrics.widthPixels * 0.75).toInt()
+                  }
+
+                  container.addView(bubble)
+                  chatContainer.addView(container)
+                  
+                  scrollContainer.post {
+                      scrollContainer.fullScroll(ScrollView.FOCUS_DOWN)
+                  }
+                  return id
+              }
+
+              private fun removeMessage(id: Int) {
+                  val view = chatContainer.findViewWithTag<View>(id)
+                  if (view != null) chatContainer.removeView(view)
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  scope.cancel()
+              }
+          }
+          EOF
+      - run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AiChat-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
