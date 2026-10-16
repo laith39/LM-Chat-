@@ -43,8 +43,8 @@ jobs:
                   applicationId = "com.laith.aichat"
                   minSdk = 24
                   targetSdk = 34
-                  versionCode = 2
-                  versionName = "1.1"
+                  versionCode = 3
+                  versionName = "1.2"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -76,10 +76,12 @@ jobs:
           package com.laith.aichat
 
           import android.app.Activity
+          import android.app.AlertDialog
           import android.content.Intent
           import android.graphics.Bitmap
           import android.graphics.BitmapFactory
           import android.graphics.Color
+          import android.graphics.Typeface
           import android.graphics.drawable.GradientDrawable
           import android.net.Uri
           import android.os.Bundle
@@ -103,9 +105,13 @@ jobs:
               private lateinit var previewImage: ImageView
               private val scope = CoroutineScope(Dispatchers.Main + Job())
 
-                        private val apiKey = "AQ.Ab8RN6KULW1gAS2FaqjLcq4tTXYk2E0zfyAn37toBpg7x9cyOA"
-              // لو ظهر خطأ بخصوص الموديل غيّر الاسم هنا
-              private val modelName = "gemini-3.5-flash"
+              private val prefs by lazy { getSharedPreferences("aichat", MODE_PRIVATE) }
+              private var apiKey: String
+                  get() = prefs.getString("api_key", "") ?: ""
+                  set(v) { prefs.edit().putString("api_key", v.trim()).apply() }
+              private var modelName: String
+                  get() = prefs.getString("model", "gemini-3.5-flash") ?: "gemini-3.5-flash"
+                  set(v) { prefs.edit().putString("model", v.trim()).apply() }
 
               private var pendingImage: Bitmap? = null
               private var busy = false
@@ -122,6 +128,31 @@ jobs:
                       layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                   }
 
+                  // الشريط العلوي
+                  val topBar = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(dp(16), dp(10), dp(8), dp(10))
+                      setBackgroundColor(Color.parseColor("#151C2C"))
+                  }
+                  val title = TextView(this).apply {
+                      text = "Gemini AI Chat"
+                      setTextColor(Color.WHITE)
+                      textSize = 17f
+                      setTypeface(typeface, Typeface.BOLD)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  val gear = TextView(this).apply {
+                      text = "⚙️"
+                      textSize = 22f
+                      gravity = Gravity.CENTER
+                      setPadding(dp(12), dp(4), dp(12), dp(4))
+                      setOnClickListener { showSettings() }
+                  }
+                  topBar.addView(title)
+                  topBar.addView(gear)
+                  root.addView(topBar)
+
                   chatContainer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       setPadding(dp(8), dp(8), dp(8), dp(8))
@@ -133,7 +164,6 @@ jobs:
                   }
                   root.addView(scrollContainer)
 
-                  // شريط معاينة الصورة المرفقة
                   previewRow = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
@@ -210,6 +240,44 @@ jobs:
 
                   setContentView(root)
                   addMessage("أهلاً بك! اكتب رسالتك، أو اضغط 📎 لإرفاق صورة وتحليلها.", false, null)
+
+                  if (apiKey.isBlank()) {
+                      addMessage("أدخل مفتاح API من زر ⚙️ بالأعلى للبدء.", false, null)
+                      root.post { showSettings() }
+                  }
+              }
+
+              // ---------- الإعدادات ----------
+
+              private fun showSettings() {
+                  val box = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(dp(20), dp(12), dp(20), 0)
+                  }
+                  val keyInput = EditText(this).apply {
+                      hint = "مفتاح API"
+                      setText(apiKey)
+                      setSingleLine(true)
+                  }
+                  val modelInput = EditText(this).apply {
+                      hint = "اسم الموديل"
+                      setText(modelName)
+                      setSingleLine(true)
+                  }
+                  box.addView(keyInput)
+                  box.addView(modelInput)
+
+                  AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                      .setTitle("الإعدادات")
+                      .setView(box)
+                      .setPositiveButton("حفظ") { _, _ ->
+                          apiKey = keyInput.text.toString()
+                          val m = modelInput.text.toString()
+                          modelName = if (m.isBlank()) "gemini-3.5-flash" else m
+                          Toast.makeText(this, "تم الحفظ", Toast.LENGTH_SHORT).show()
+                      }
+                      .setNegativeButton("إلغاء", null)
+                      .show()
               }
 
               // ---------- الصور ----------
@@ -243,7 +311,6 @@ jobs:
                   previewRow.visibility = View.GONE
               }
 
-              // قراءة الصورة وتصغيرها لتقليل الحجم
               private fun loadBitmap(uri: Uri): Bitmap? {
                   val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
                   val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -269,6 +336,12 @@ jobs:
 
               private fun sendMessage() {
                   if (busy) return
+                  val key = apiKey
+                  if (key.isBlank()) {
+                      showSettings()
+                      return
+                  }
+                  val model = modelName
                   val typed = inputField.text.toString().trim()
                   val image = pendingImage
                   if (typed.isEmpty() && image == null) return
@@ -299,13 +372,13 @@ jobs:
                               JSONArray().put(JSONObject().put("parts", parts))
                           )
 
-                          val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent")
+                          val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
                           conn = url.openConnection() as HttpURLConnection
                           conn.requestMethod = "POST"
                           conn.connectTimeout = 30000
                           conn.readTimeout = 90000
                           conn.setRequestProperty("Content-Type", "application/json")
-                          conn.setRequestProperty("x-goog-api-key", apiKey)
+                          conn.setRequestProperty("x-goog-api-key", key)
                           conn.doOutput = true
                           conn.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
 
