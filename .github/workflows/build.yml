@@ -76,7 +76,6 @@ jobs:
           package com.laith.aichat
 
           import android.app.Activity
-          import android.content.SharedPreferences
           import android.graphics.Color
           import android.graphics.drawable.GradientDrawable
           import android.os.Bundle
@@ -91,52 +90,22 @@ jobs:
           import java.net.URL
 
           class MainActivity : Activity() {
-              private lateinit var prefs: SharedPreferences
               private lateinit var chatContainer: LinearLayout
               private lateinit var scrollContainer: ScrollView
               private lateinit var inputField: EditText
-              private lateinit var apiKeyInput: EditText
               private val scope = CoroutineScope(Dispatchers.Main + Job())
+              
+              // تم تضمين مفتاح الـ API هنا مباشرة داخل الكود
+              private val apiKey = "ضع_مفتاحك_هنا_بين_التنصيص"
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  prefs = getSharedPreferences("ai_prefs", MODE_PRIVATE)
                   window.decorView.setBackgroundColor(Color.parseColor("#0B0F19"))
 
                   val root = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                   }
-
-                  val topBar = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      setPadding(30, 30, 30, 20)
-                      background = GradientDrawable().apply {
-                          setColor(Color.parseColor("#151C2C"))
-                      }
-                      gravity = Gravity.CENTER_VERTICAL
-                  }
-
-                  apiKeyInput = EditText(this).apply {
-                      hint = "أدخل Gemini API Key هنا..."
-                      setText(prefs.getString("api_key", ""))
-                      setTextColor(Color.WHITE)
-                      setHintTextColor(Color.parseColor("#64748B"))
-                      textSize = 13f
-                      setBackgroundColor(Color.TRANSPARENT)
-                      setPadding(20, 15, 20, 15)
-                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                      inputType = android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD or android.text.InputType.TYPE_CLASS_TEXT
-                      addTextChangedListener(object : android.text.TextWatcher {
-                          override fun afterTextChanged(s: android.text.Editable?) {
-                              prefs.edit().putString("api_key", s.toString().trim()).apply()
-                          }
-                          override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                          override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                      })
-                  }
-                  topBar.addView(apiKeyInput)
-                  root.addView(topBar)
 
                   chatContainer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -191,17 +160,11 @@ jobs:
                   root.addView(bottomBar)
 
                   setContentView(root)
-                  addMessage("أهلاً بك! أدخل مفتاح الـ API في الأعلى وابدأ الدردشة.", false)
+                  addMessage("أهلاً بك! التطبيق جاهز للدردشة المباشرة.", false)
               }
 
               private fun sendMessage() {
                   val text = inputField.text.toString().trim()
-                  val apiKey = apiKeyInput.text.toString().trim()
-
-                  if (apiKey.isEmpty()) {
-                      Toast.makeText(this, "الرجاء إدخال مفتاح API أولاً", Toast.LENGTH_SHORT).show()
-                      return
-                  }
                   if (text.isEmpty()) return
 
                   addMessage(text, true)
@@ -211,7 +174,7 @@ jobs:
 
                   scope.launch(Dispatchers.IO) {
                       try {
-                          val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey")
+                          val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
                           val conn = url.openConnection() as HttpURLConnection
                           conn.requestMethod = "POST"
                           conn.setRequestProperty("Content-Type", "application/json")
