@@ -15,23 +15,23 @@ jobs:
       - name: Generate project
         run: |
           mkdir -p app/src/main/java/com/laith/aichat
-          cat > settings.gradle.kts <<'EOF'
+          cat > settings.gradle.kts <<'EOT'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement { repositories { google(); mavenCentral() } }
           rootProject.name = "AiChat"
           include(":app")
-          EOF
-          cat > build.gradle.kts <<'EOF'
+          EOT
+          cat > build.gradle.kts <<'EOT'
           plugins {
               id("com.android.application") version "8.5.2" apply false
               id("org.jetbrains.kotlin.android") version "1.9.24" apply false
           }
-          EOF
-          cat > gradle.properties <<'EOF'
+          EOT
+          cat > gradle.properties <<'EOT'
           android.useAndroidX=true
           org.gradle.jvmargs=-Xmx2g
-          EOF
-          cat > app/build.gradle.kts <<'EOF'
+          EOT
+          cat > app/build.gradle.kts <<'EOT'
           plugins {
               id("com.android.application")
               id("org.jetbrains.kotlin.android")
@@ -43,8 +43,8 @@ jobs:
                   applicationId = "com.laith.aichat"
                   minSdk = 24
                   targetSdk = 34
-                  versionCode = 1
-                  versionName = "1.0"
+                  versionCode = 2
+                  versionName = "1.1"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -55,15 +55,15 @@ jobs:
           dependencies {
               implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
           }
-          EOF
-          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          EOT
+          cat > app/src/main/AndroidManifest.xml <<'EOT'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET"/>
               <application
                   android:label="Gemini AI Chat"
-                  android:theme="@android:style/Theme.Material.NoActionBar"
-                  android:usesCleartextTraffic="true">
-                  <activity android:name=".MainActivity" android:exported="true">
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
@@ -71,14 +71,19 @@ jobs:
                   </activity>
               </application>
           </manifest>
-          EOF
-          cat > app/src/main/java/com/laith/aichat/MainActivity.kt <<'EOF'
+          EOT
+          cat > app/src/main/java/com/laith/aichat/MainActivity.kt <<'EOT'
           package com.laith.aichat
 
           import android.app.Activity
+          import android.content.Intent
+          import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
           import android.graphics.Color
           import android.graphics.drawable.GradientDrawable
+          import android.net.Uri
           import android.os.Bundle
+          import android.util.Base64
           import android.view.Gravity
           import android.view.View
           import android.view.ViewGroup
@@ -86,6 +91,7 @@ jobs:
           import kotlinx.coroutines.*
           import org.json.JSONArray
           import org.json.JSONObject
+          import java.io.ByteArrayOutputStream
           import java.net.HttpURLConnection
           import java.net.URL
 
@@ -93,10 +99,19 @@ jobs:
               private lateinit var chatContainer: LinearLayout
               private lateinit var scrollContainer: ScrollView
               private lateinit var inputField: EditText
+              private lateinit var previewRow: LinearLayout
+              private lateinit var previewImage: ImageView
               private val scope = CoroutineScope(Dispatchers.Main + Job())
-              
-              // تم تضمين مفتاح الـ API هنا مباشرة داخل الكود
-              private val apiKey = "ضع_مفتاحك_هنا_بين_التنصيص"
+
+                        private val apiKey = "AQ.Ab8RN6KULW1gAS2FaqjLcq4tTXYk2E0zfyAn37toBpg7x9cyOA"
+              // لو ظهر خطأ بخصوص الموديل غيّر الاسم هنا
+              private val modelName = "gemini-3.5-flash"
+
+              private var pendingImage: Bitmap? = null
+              private var busy = false
+              private val PICK_IMAGE = 101
+
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
@@ -109,7 +124,7 @@ jobs:
 
                   chatContainer = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(20, 20, 20, 20)
+                      setPadding(dp(8), dp(8), dp(8), dp(8))
                   }
 
                   scrollContainer = ScrollView(this).apply {
@@ -118,14 +133,53 @@ jobs:
                   }
                   root.addView(scrollContainer)
 
+                  // شريط معاينة الصورة المرفقة
+                  previewRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      setPadding(dp(12), dp(8), dp(12), dp(8))
+                      setBackgroundColor(Color.parseColor("#111827"))
+                      visibility = View.GONE
+                  }
+                  previewImage = ImageView(this).apply {
+                      layoutParams = LinearLayout.LayoutParams(dp(64), dp(64))
+                      scaleType = ImageView.ScaleType.CENTER_CROP
+                  }
+                  previewRow.addView(previewImage)
+                  val previewLabel = TextView(this).apply {
+                      text = "صورة مرفقة"
+                      setTextColor(Color.parseColor("#94A3B8"))
+                      textSize = 13f
+                      setPadding(dp(12), 0, dp(12), 0)
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  previewRow.addView(previewLabel)
+                  val removeBtn = TextView(this).apply {
+                      text = "✕"
+                      setTextColor(Color.WHITE)
+                      textSize = 18f
+                      gravity = Gravity.CENTER
+                      setPadding(dp(14), dp(8), dp(14), dp(8))
+                      setOnClickListener { clearPending() }
+                  }
+                  previewRow.addView(removeBtn)
+                  root.addView(previewRow)
+
                   val bottomBar = LinearLayout(this).apply {
                       orientation = LinearLayout.HORIZONTAL
-                      setPadding(20, 20, 20, 20)
-                      background = GradientDrawable().apply {
-                          setColor(Color.parseColor("#151C2C"))
-                      }
+                      setPadding(dp(10), dp(10), dp(10), dp(10))
+                      setBackgroundColor(Color.parseColor("#151C2C"))
                       gravity = Gravity.CENTER_VERTICAL
                   }
+
+                  val attachBtn = TextView(this).apply {
+                      text = "📎"
+                      textSize = 22f
+                      gravity = Gravity.CENTER
+                      setPadding(dp(10), dp(6), dp(10), dp(6))
+                      setOnClickListener { pickImage() }
+                  }
+                  bottomBar.addView(attachBtn)
 
                   inputField = EditText(this).apply {
                       hint = "اكتب رسالتك هنا..."
@@ -133,14 +187,9 @@ jobs:
                       setHintTextColor(Color.parseColor("#64748B"))
                       textSize = 15f
                       setBackgroundColor(Color.TRANSPARENT)
-                      setPadding(20, 15, 20, 15)
+                      setPadding(dp(8), dp(8), dp(8), dp(8))
+                      maxLines = 5
                       layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                      setOnEditorActionListener { _, actionId, _ ->
-                          if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
-                              sendMessage()
-                              true
-                          } else false
-                      }
                   }
                   bottomBar.addView(inputField)
 
@@ -151,98 +200,201 @@ jobs:
                       isAllCaps = false
                       background = GradientDrawable().apply {
                           setColor(Color.parseColor("#007BFF"))
-                          cornerRadius = 16f
+                          cornerRadius = dp(12).toFloat()
                       }
-                      setPadding(30, 20, 30, 20)
+                      setPadding(dp(16), dp(8), dp(16), dp(8))
                       setOnClickListener { sendMessage() }
                   }
                   bottomBar.addView(sendBtn)
                   root.addView(bottomBar)
 
                   setContentView(root)
-                  addMessage("أهلاً بك! التطبيق جاهز للدردشة المباشرة.", false)
+                  addMessage("أهلاً بك! اكتب رسالتك، أو اضغط 📎 لإرفاق صورة وتحليلها.", false, null)
               }
 
+              // ---------- الصور ----------
+
+              private fun pickImage() {
+                  val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                      type = "image/*"
+                      addCategory(Intent.CATEGORY_OPENABLE)
+                  }
+                  startActivityForResult(Intent.createChooser(intent, "اختر صورة"), PICK_IMAGE)
+              }
+
+              @Deprecated("Deprecated in Java")
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  if (requestCode == PICK_IMAGE && resultCode == RESULT_OK) {
+                      val uri = data?.data ?: return
+                      val bmp = try { loadBitmap(uri) } catch (e: Exception) { null }
+                      if (bmp == null) {
+                          Toast.makeText(this, "تعذر قراءة الصورة", Toast.LENGTH_SHORT).show()
+                          return
+                      }
+                      pendingImage = bmp
+                      previewImage.setImageBitmap(bmp)
+                      previewRow.visibility = View.VISIBLE
+                  }
+              }
+
+              private fun clearPending() {
+                  pendingImage = null
+                  previewRow.visibility = View.GONE
+              }
+
+              // قراءة الصورة وتصغيرها لتقليل الحجم
+              private fun loadBitmap(uri: Uri): Bitmap? {
+                  val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+                  val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                  BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                  var sample = 1
+                  while (bounds.outWidth / sample > 2048 || bounds.outHeight / sample > 2048) sample *= 2
+                  val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                  val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return null
+                  val maxSide = 1280
+                  val scale = minOf(1f, maxSide.toFloat() / maxOf(bmp.width, bmp.height))
+                  return if (scale < 1f)
+                      Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true)
+                  else bmp
+              }
+
+              private fun bitmapToBase64(bmp: Bitmap): String {
+                  val out = ByteArrayOutputStream()
+                  bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                  return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+              }
+
+              // ---------- الإرسال ----------
+
               private fun sendMessage() {
-                  val text = inputField.text.toString().trim()
-                  if (text.isEmpty()) return
+                  if (busy) return
+                  val typed = inputField.text.toString().trim()
+                  val image = pendingImage
+                  if (typed.isEmpty() && image == null) return
 
-                  addMessage(text, true)
+                  val prompt = if (typed.isEmpty()) "حلل هذه الصورة وصف ما فيها بالتفصيل." else typed
+
+                  addMessage(if (typed.isEmpty()) "📷 (صورة)" else typed, true, image)
                   inputField.text.clear()
+                  clearPending()
 
-                  val loadingId = addMessage("جاري التفكير...", false)
+                  busy = true
+                  val loadingId = addMessage("جاري التفكير...", false, null)
 
                   scope.launch(Dispatchers.IO) {
+                      var conn: HttpURLConnection? = null
                       try {
-                          val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
-                          val conn = url.openConnection() as HttpURLConnection
-                          conn.requestMethod = "POST"
-                          conn.setRequestProperty("Content-Type", "application/json")
-                          conn.doOutput = true
-
-                          val jsonBody = JSONObject().apply {
-                              put("contents", JSONArray().put(JSONObject().apply {
-                                  put("parts", JSONArray().put(JSONObject().put("text", text)))
+                          val parts = JSONArray()
+                          if (image != null) {
+                              parts.put(JSONObject().put("inline_data", JSONObject().apply {
+                                  put("mime_type", "image/jpeg")
+                                  put("data", bitmapToBase64(image))
                               }))
                           }
+                          parts.put(JSONObject().put("text", prompt))
 
-                          conn.outputStream.write(jsonBody.toString().toByteArray())
-                          
-                          val responseCode = conn.responseCode
-                          if (responseCode == 200) {
-                              val responseStr = conn.inputStream.bufferedReader().readText()
-                              val jsonResp = JSONObject(responseStr)
-                              val reply = jsonResp.getJSONArray("candidates")
-                                  .getJSONObject(0).getJSONObject("content")
-                                  .getJSONArray("parts").getJSONObject(0).getString("text")
+                          val jsonBody = JSONObject().put(
+                              "contents",
+                              JSONArray().put(JSONObject().put("parts", parts))
+                          )
 
+                          val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent")
+                          conn = url.openConnection() as HttpURLConnection
+                          conn.requestMethod = "POST"
+                          conn.connectTimeout = 30000
+                          conn.readTimeout = 90000
+                          conn.setRequestProperty("Content-Type", "application/json")
+                          conn.setRequestProperty("x-goog-api-key", apiKey)
+                          conn.doOutput = true
+                          conn.outputStream.use { it.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
+
+                          val code = conn.responseCode
+                          if (code == 200) {
+                              val respStr = conn.inputStream.bufferedReader().readText()
+                              val reply = extractReply(respStr)
                               withContext(Dispatchers.Main) {
                                   removeMessage(loadingId)
-                                  addMessage(reply, false)
+                                  addMessage(reply, false, null)
                               }
                           } else {
+                              val err = conn.errorStream?.bufferedReader()?.readText() ?: ""
                               withContext(Dispatchers.Main) {
                                   removeMessage(loadingId)
-                                  addMessage("خطأ في الاتصال بالخادم ($responseCode)", false)
+                                  addMessage("خطأ ($code): $err", false, null)
                               }
                           }
                       } catch (e: Exception) {
                           withContext(Dispatchers.Main) {
                               removeMessage(loadingId)
-                              addMessage("فشل الاتصال: ${e.localizedMessage}", false)
+                              addMessage("فشل الاتصال: ${e.localizedMessage}", false, null)
                           }
+                      } finally {
+                          conn?.disconnect()
+                          withContext(Dispatchers.Main) { busy = false }
                       }
                   }
               }
 
+              private fun extractReply(json: String): String {
+                  val resp = JSONObject(json)
+                  val candidates = resp.optJSONArray("candidates")
+                  if (candidates == null || candidates.length() == 0) {
+                      val reason = resp.optJSONObject("promptFeedback")?.optString("blockReason") ?: ""
+                      return "لم يصل رد من النموذج. $reason"
+                  }
+                  val partsArr = candidates.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts")
+                      ?: return "رد فارغ من النموذج."
+                  val sb = StringBuilder()
+                  for (i in 0 until partsArr.length()) {
+                      sb.append(partsArr.getJSONObject(i).optString("text", ""))
+                  }
+                  return sb.toString().ifBlank { "رد فارغ من النموذج." }
+              }
+
+              // ---------- الواجهة ----------
+
               private var msgCounter = 0
-              private fun addMessage(text: String, isUser: Boolean): Int {
+              private fun addMessage(text: String, isUser: Boolean, image: Bitmap?): Int {
                   val id = msgCounter++
                   val container = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      gravity = if (isUser) Gravity.END else Gravity.START
-                      setPadding(0, 10, 0, 10)
+                      setPadding(0, dp(5), 0, dp(5))
                       tag = id
+                  }
+                  val lp = { LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                      gravity = if (isUser) Gravity.END else Gravity.START
+                  } }
+
+                  if (image != null) {
+                      val iv = ImageView(this).apply {
+                          setImageBitmap(image)
+                          adjustViewBounds = true
+                          maxWidth = dp(220)
+                          maxHeight = dp(220)
+                          scaleType = ImageView.ScaleType.FIT_CENTER
+                          layoutParams = lp().apply { bottomMargin = dp(4) }
+                      }
+                      container.addView(iv)
                   }
 
                   val bubble = TextView(this).apply {
                       this.text = text
                       textSize = 15f
                       setTextColor(Color.WHITE)
-                      setPadding(25, 20, 25, 20)
+                      setTextIsSelectable(true)
+                      setPadding(dp(12), dp(10), dp(12), dp(10))
                       background = GradientDrawable().apply {
                           setColor(if (isUser) Color.parseColor("#007BFF") else Color.parseColor("#1E293B"))
-                          cornerRadius = 20f
+                          cornerRadius = dp(14).toFloat()
                       }
-                      maxWidth = (resources.displayMetrics.widthPixels * 0.75).toInt()
+                      maxWidth = (resources.displayMetrics.widthPixels * 0.85).toInt()
+                      layoutParams = lp()
                   }
-
                   container.addView(bubble)
                   chatContainer.addView(container)
-                  
-                  scrollContainer.post {
-                      scrollContainer.fullScroll(ScrollView.FOCUS_DOWN)
-                  }
+
+                  scrollContainer.post { scrollContainer.fullScroll(ScrollView.FOCUS_DOWN) }
                   return id
               }
 
@@ -256,7 +408,7 @@ jobs:
                   scope.cancel()
               }
           }
-          EOF
+          EOT
       - run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
