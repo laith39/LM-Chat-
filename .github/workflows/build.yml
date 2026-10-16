@@ -131,7 +131,7 @@ jobs:
                           override fun afterTextChanged(s: android.text.Editable?) {
                               prefs.edit().putString("api_key", s.toString().trim()).apply()
                           }
-                          override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after) {}
+                          override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                           override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
                       })
                   }
